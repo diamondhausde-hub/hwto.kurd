@@ -12,11 +12,12 @@
  *   #/search?q=batman      -> { name: 'search', q: 'batman', type: ''|movie|tv }
  *   #/movie/278            -> { name: 'details', type: 'movie', id: 278 }
  *   #/tv/1396              -> { name: 'details', type: 'tv', id: 1396 }
- *   #/watch/movie/278?title=..  -> { name: 'watch', type: 'movie', id: 278, title }
+ *   #/watch/movie/278?title=..&year=1994 -> { name: 'watch', type: 'movie', id: 278, title, year }
  *   #/watch/tv/1396?title=..&season=1&episode=1  -> TV with season/episode
  *
  * `watch.id` is the TMDB id — the same id used by the API. vidcore.io uses
  * this id directly: https://vidcore.io/movie/{id} or /tv/{id}/{season}/{ep}.
+ * `year` is passed only to sharpen the Beenar title match for alternate servers.
  */
 
 import { CATEGORY_SLUGS } from './config.js';
@@ -54,6 +55,7 @@ export function parseHash(hash) {
     }
     if (params.name === 'watch') {
       params.title = query.get('title') || params.title || '';
+      params.year = query.get('year') || '';
       params.season = query.get('season') || params.season || '';
       params.episode = query.get('episode') || params.episode || '';
     }

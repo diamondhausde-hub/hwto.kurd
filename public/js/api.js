@@ -50,13 +50,16 @@
  *        Movie details carry NO country field at all.
  *        Unknown id -> HTTP 200 with {"error":"..."} — never an HTTP error.
  *
- *   ?action=servers[&movieid=][&title=][&tmdbid=]
- *     -> {movieid, servers:[{key,label,url}], cached} | {error:"..."}
- *        Alternate Kurdish embed servers scraped server-side by our own
- *        proxy (never by the browser). Needs either `movieid`, or `title`
- *        / `tmdbid` so the proxy can resolve the site's own movie id.
- *        Empty `servers` is a valid answer — the VidCore player keeps
- *        working, so callers must treat failures as "no alternates".
+ *   ?action=servers&title=..&type=movie&year=2021[&tmdbid=][&movieid=]
+ *   ?action=servers&title=..&type=tv&season=1&episode=2
+ *     -> {servers:[{key,label,url,host,quality,source}], sources:{beenar,kurdcinama},
+ *         matched:{id,name,release_date}|null, cached}
+ *        Alternate playback servers resolved server-side by our own proxy:
+ *        Beenar (movies + series) merged with the kurdcinama.com player page
+ *        (movies only), health-checked (dead links dropped), then ordered
+ *        VidCore-family first. Needs `title` (plus `year` to sharpen the
+ *        match) or `movieid`. Empty `servers` is a valid answer — the VidCore
+ *        player keeps working, so callers must treat failures as "no alternates".
  *
  *   NOTE — there is NO genre / country / language action: list rows never
  *     carry `genre_ids`, so "الأفلام" / "المسلسلات" are slices of the lists
@@ -562,18 +565,25 @@ export async function getDetail(mediaType, id, { signal } = {}) {
   return normaliseDetail(json, type);
 }
 
-/* Kurdish / embed-alternative server list scraped server-side from
- * kurdcinama.com via our same-origin proxy. Local server or self-hosted
- * deployment is required for a non-empty response — on Vercel the scrape is
- * skipped and VidCore remains the only available embed.
+/* Alternate playback servers — resolved and health-checked server-side by
+ * our own proxy (lib/servers.mjs via server.js / api/proxy.js). Merges
+ * Beenar (movies + series) with the kurdcinama.com player page (movies),
+ * drops dead links, orders VidCore-family first. No API key involved.
  *
- * params: { movieid } OR { title }
- * returns: { movieid?, servers: [{ id, name, url }], cached } */
-export async function getServers({ movieid, title, tmdbid, signal } = {}) {
-  const paramsObj = { action: 'servers' };
+ * params: { title, type: 'movie'|'tv', year?, season?, episode?,
+ *           tmdbid?, movieid? }
+ * returns: { servers: [{ key, label, url, host, quality, source }],
+ *            sources: { beenar, kurdcinama }, matched, cached } */
+export async function getServers({ movieid, title, tmdbid, type = 'movie', year, season, episode, signal } = {}) {
+  const paramsObj = { action: 'servers', type: type === 'tv' ? 'tv' : 'movie' };
   if (movieid) paramsObj.movieid = String(movieid);
   if (title) paramsObj.title = String(title);
   if (tmdbid) paramsObj.tmdbid = String(tmdbid);
+  if (year) paramsObj.year = String(year);
+  if (type === 'tv') {
+    if (season) paramsObj.season = String(season);
+    if (episode) paramsObj.episode = String(episode);
+  }
 
   const json = await request(paramsObj, { ttl: 10 * 60 * 1000, signal });
   return json;

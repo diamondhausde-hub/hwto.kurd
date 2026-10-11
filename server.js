@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { collectServers } from './lib/servers.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -13,9 +14,8 @@ const UPSTREAM_HOST = 'kurdcinama.com';
 const API_PREFIX = '/api/';
 const API_TTL = 180 * 1000;
 const UPSTREAM_TIMEOUT = 20000;
-// Kurdish-servers scraping: a per-page deadline plus a total budget, so a slow
-// upstream can never hold one HTTP request open indefinitely.
-const SCRAPE_TIMEOUT_MS = 8000;
+// Alternate servers are looked up, scraped and health-checked inside
+// lib/servers.mjs; this is the total budget one HTTP request may spend there.
 const SERVERS_BUDGET_MS = 20000;
 const MAX_API_RESPONSE = 2 * 1024 * 1024; // 2 MB
 const MAX_CACHE_ENTRIES = 400;
@@ -175,138 +175,9 @@ function checkRateLimit(ip) {
   return true;
 }
 
-/* Kurdish servers embed scraper ------------------------------------------- */
-
-async function fetchPageText(url, options) {
-  try {
-    const res = await fetch(url, {
-      redirect: 'follow',
-      ...options,
-      // The scraper walks several upstream pages per request; without a
-      // deadline a slow upstream holds the caller's HTTP request open.
-      signal: (options && options.signal) || AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; hwto.kurd/1.0)',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        ...(options && options.headers)
-      }
-    });
-    const text = await res.text();
-    return { ok: res.ok, status: res.status, text };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-}
-
-function extractHiddenInputs(html) {
-  const out = {};
-  for (const m of html.matchAll(/<input[^>]*type=["']hidden["'][^>]*>/gi)) {
-    const tag = m[0];
-    const name = (/name=["']([^"']+)["']/.exec(tag) || [])[1];
-    const value = (/value=["']([^"']*)["']/.exec(tag) || [])[1];
-    if (name) out[name] = value || '';
-  }
-  return out;
-}
-
-function extractServersListFromHtml(html) {
-  // The server <select> is class="quality-select" — options are numeric ids.
-  const options = [];
-  for (const m of html.matchAll(/<option[^>]*value=["'](\d+)["'][^>]*>([^<]+)<\/option>/gi)) {
-    options.push({ value: m[1], label: m[2].trim() });
-  }
-  return options;
-}
-
-function extractIframeSrc(html) {
-  const m = /<iframe[^>]*src=["']([^"']+)["']/i.exec(html);
-  return m ? m[1] : null;
-}
-
-async function findMovieIdByTitle(title, tmdbid, signal) {
-  if (!title.trim() && !tmdbid) return null;
-  if (tmdbid) {
-    const located = await findMovieIdByTmdbId(String(tmdbid), title, signal);
-    if (located) return located;
-  }
-  if (!title.trim()) return null;
-  const r = await fetchPageText(`https://${UPSTREAM_HOST}/Search.aspx?q=${encodeURIComponent(title.trim())}`, { signal });
-  if (!r || !r.ok || !r.text) return null;
-  const norm = (s) => String(s || '').toLowerCase().replace(/\(\d{4}\)/g, '').replace(/\s+/g, ' ').trim();
-  const target = norm(title).slice(0, 40);
-  const re = /details\.aspx\?movieid=(\d+)/g;
-  let m;
-  while ((m = re.exec(r.text))) {
-    const chunk = r.text.slice(m.index, m.index + 1500);
-    const t = chunk.match(/class="card__title">([^<]+)</);
-    if (t && target && norm(t[1]) === target) return m[1];
-  }
-  // Never guess a wrong movie — return null so the pills strip stays hidden.
-  return null;
-}
-
-async function findMovieIdByTmdbId(tmdbId, searchTitle, signal) {
-  if (!tmdbId) return null;
-  if (!searchTitle.trim()) searchTitle = '';
-  const searchUrl = searchTitle.trim()
-    ? `https://${UPSTREAM_HOST}/Search.aspx?q=${encodeURIComponent(searchTitle.trim())}`
-    : `https://${UPSTREAM_HOST}/Search.aspx`;
-  const r = await fetchPageText(searchUrl, { signal });
-  if (!r || !r.ok || !r.text) return null;
-  const ids = [];
-  let m;
-  const re = /"movieid[^\d]*(\d+)"/g;
-  while ((m = re.exec(r.text))) {
-    if (!ids.includes(m[1])) ids.push(m[1]);
-  }
-  if (!ids.length) {
-    const re2 = /moves-details\.aspx\?movieid=(\d+)|details\.aspx\?movieid=(\d+)/g;
-    while ((m = re2.exec(r.text))) {
-      const id = m[1] || m[2];
-      if (!ids.includes(id)) ids.push(id);
-    }
-  }
-  // Fetch each candidate details page and compare its embedded tmdbId.
-  for (const cand of ids.slice(0, 12)) {
-    const detail = await fetchPageText(`https://${UPSTREAM_HOST}/moves-details.aspx?movieid=${cand}`, { signal });
-    if (!detail || !detail.ok || !detail.text) continue;
-    const hidden = detail.text.match(/<input[^>]*type=["']hidden["'][^>]*id=["']tmdbId["'][^>]*value=["'](\d+)["']/i);
-    if (hidden && hidden[1] === String(tmdbId)) return cand;
-  }
-  return null;
-}
-
-async function scrapeKurdishServersForMovie(movieid, signal) {
-  const pageUrl = `https://${UPSTREAM_HOST}/online.aspx?movieid=${encodeURIComponent(movieid)}`;
-  const index = await fetchPageText(pageUrl, { signal });
-  if (!index || !index.ok || !index.text) return { error: 'تعذّر جلب صفحة المشغل' };
-
-  const options = extractServersListFromHtml(index.text);
-  if (options.length === 0) return { error: 'لم يُعثر على سيرفرات في الصفحة' };
-
-  const servers = [];
-  for (const opt of options) {
-    const refreshed = await fetchPageText(pageUrl, { signal });
-    const hidden = refreshed ? extractHiddenInputs(refreshed.text) : extractHiddenInputs(index.text);
-    const body = new URLSearchParams();
-    for (const [k, v] of Object.entries(hidden)) body.set(k, v);
-    body.set('__EVENTTARGET', 'ctl00$MainContent$DropDownList1');
-    body.set('__EVENTARGUMENT', '');
-    body.set('__LASTFOCUS', '');
-    body.set('ctl00$MainContent$DropDownList1', opt.value);
-    body.set('ctl00$MainContent$hiddenVideoUrl', hidden['ctl00$MainContent$hiddenVideoUrl'] || '');
-
-    const post = await fetchPageText(pageUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Referer': pageUrl },
-      body: body.toString(),
-      signal
-    });
-    const src = post && post.ok ? extractIframeSrc(post.text) : null;
-    if (src) servers.push({ key: opt.label.replace(/^\d+[-.)\s]*/, '').trim(), label: opt.label, url: src });
-  }
-  return { movieid, servers };
-}
+/* Alternate playback servers ------------------------------------------- *
+ * The lookup (Beenar title search + kurdcinama scrape) and the liveness
+ * filter live in lib/servers.mjs so this file and api/proxy.js share them. */
 
 function isAllowedApiPath(pathname, search) {
   if (pathname !== '/api/TMDBCache.aspx') return false;
@@ -340,40 +211,39 @@ async function proxyApi(req, res, reqUrl, isHead = false) {
     return;
   }
 
-  // Server list for Kurdish servers — scraped from kurdcinama.com, not cached upstream.
-  // shape: /api/TMDBCache.aspx?action=servers&movieid=12345
+  // Alternate playback servers: Beenar (movies + series) merged with the
+  // kurdcinama.com player page (movies only), health-checked server-side.
+  // shape: /api/TMDBCache.aspx?action=servers&title=Dune&type=movie&year=2021
+  //        /api/TMDBCache.aspx?action=servers&title=..&type=tv&season=1&episode=2
   if (new URLSearchParams(reqUrl.search).get('action') === 'servers') {
     const search = new URLSearchParams(reqUrl.search);
-    let movieid = (search.get('movieid') || '').trim();
-    const tmdbId = (search.get('tmdbid') || '').trim();
-    const title = (search.get('title') || '').trim();
-    const signal = AbortSignal.timeout(SERVERS_BUDGET_MS);
-    const hasLookup = Boolean(movieid || tmdbId || title);
-    if (!movieid) {
-      if (tmdbId) movieid = await findMovieIdByTitle(title, tmdbId, signal);
-      if (!movieid && title) movieid = await findMovieIdByTitle(title, tmdbId, signal);
-    }
-    if (!movieid) {
-      if (!hasLookup) {
-        // Malformed request: no identifier of any kind.
-        sendJson(req, res, 400, { error: 'movieid or title is required for action=servers' }, { 'Cache-Control': 'no-store' }, isHead);
-        return;
-      }
-      // Well-formed request: the title simply is not on the source site, and
-      // "no alternates" is a valid answer — the VidCore player keeps working.
-      sendJson(req, res, 200, { movieid: null, servers: [] }, {
-        'Cache-Control': 'public, max-age=300, stale-while-revalidate=60',
-        'X-Cache': 'MISS'
-      }, isHead);
+    const params = {
+      movieid: (search.get('movieid') || '').trim(),
+      tmdbid: (search.get('tmdbid') || '').trim(),
+      title: (search.get('title') || '').trim(),
+      year: (search.get('year') || '').trim(),
+      type: search.get('type') === 'tv' ? 'tv' : 'movie',
+      season: (search.get('season') || '').trim(),
+      episode: (search.get('episode') || '').trim()
+    };
+    const hasLookup = Boolean(params.movieid || params.tmdbid || params.title);
+    if (!hasLookup) {
+      // Malformed request: no identifier of any kind.
+      sendJson(req, res, 400, { error: 'movieid, title or tmdbid is required for action=servers' }, { 'Cache-Control': 'no-store' }, isHead);
       return;
     }
     try {
-      const result = await scrapeKurdishServersForMovie(movieid, signal);
-      const servers = { ...result, cached: result && result.servers ? true : false };
-      const headers = { 'Cache-Control': 'public, max-age=1800, stale-while-revalidate=60', 'X-Cache': 'MISS' };
-      sendJson(req, res, result && result.error ? 502 : 200, servers, headers, isHead);
+      const result = await collectServers({ ...params, signal: AbortSignal.timeout(SERVERS_BUDGET_MS) });
+      // A title that is simply absent upstream is a valid answer, not an error:
+      // the VidCore player keeps working with no alternates at all.
+      sendJson(req, res, 200, result, {
+        'Cache-Control': result.servers.length
+          ? 'public, max-age=1800, stale-while-revalidate=60'
+          : 'public, max-age=300, stale-while-revalidate=60',
+        'X-Cache': result.cached ? 'HIT' : 'MISS'
+      }, isHead);
     } catch (err) {
-      sendJson(req, res, 502, { error: err.message || 'servers scrape failed' }, { 'Cache-Control': 'no-store' });
+      sendJson(req, res, 502, { error: err.message || 'servers lookup failed' }, { 'Cache-Control': 'no-store' }, isHead);
     }
     return;
   }

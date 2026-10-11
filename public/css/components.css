@@ -1002,49 +1002,87 @@
   }
 }
 
-.server-strip {
+/* --------------------------- playback servers bar ------------------- *
+ * One horizontal strip above the player: a label plus a small numbered  *
+ * button per server. Nothing expands, nothing covers the video.        *
+ * Titled "سيرفرات التشغيل" (Kurdish: ڕاژەکارەکانی بینین).              */
+
+.server-bar {
   display: flex;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 14px;
-  padding: 10px 14px;
-  background: var(--surface-2);
+  margin-bottom: 12px;
+  padding: 8px 12px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius);
+  background: var(--surface-2);
 }
 
-.server-strip-label {
-  color: var(--text-2);
-  font-size: 0.92rem;
+.server-bar[hidden] {
+  display: none;
+}
+
+.server-bar-label {
+  flex: 0 0 auto;
+  font-size: 0.84rem;
   font-weight: 700;
+  color: var(--text-2);
   white-space: nowrap;
 }
 
-.server-list {
+.server-bar-list {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
-.server-pill {
-  padding: 6px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--surface-3, transparent);
+.server-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-3);
   color: var(--text-2);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
-  font-size: 0.88rem;
-  transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
 }
 
-.server-pill.is-active,
-.server-pill:hover {
+.server-btn:hover,
+.server-btn:focus-visible {
   color: #fff;
-  border-color: var(--brand, #c084fc);
-  background: var(--brand, #c084fc);
+  border-color: var(--brand);
 }
 
+.server-btn.is-active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+@media (max-width: 560px) {
+  .server-bar {
+    gap: 8px;
+    padding: 7px 10px;
+  }
+
+  .server-bar-label {
+    font-size: 0.78rem;
+  }
+
+  .server-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 0.85rem;
+  }
+}
 /* ------------------------------- list sort --------------------------- */
 
 .list-sort-bar {
