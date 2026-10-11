@@ -97,12 +97,22 @@ export async function collectServers({ type, title, year, season, episode, tmdbi
 - **الترتيب** («مرتب»): `vidmoly` ← `streamwish/embedwish/playerwish` ← `sendvid` ← `beenar` ← الباقي أبجدياً؛ داخل نفس المضيف يبقى ترتيب المصدر (beenar ثم kurdcinama). حدّ أقصى **8** سيرفرات حتى تبقى اللائحة مقروءة.
 - **UAs والـ retry**: طلب واحد لإعادة المحاولة عند `reset/timeout` (نفس نمط `server.js` الحالي) — ‏Beenar ورا Sucuri يحجب بلا UA متصفح.
 
-### 2) `server.js` / `api/proxy.js`
+### 2) `server.js` / `api/proxy.js` — وبيئة Vercel
 
 - توسيع معالج `action=servers`: قراءة `type` (`movie`|`tv`، افتراضي `movie`)، `season`، `episode`، `year`، مع الإبقاء على `movieid`/`title`/`tmdbid`.
 - الحالة القديمة تبقى: بلا أي معرّف ← 400؛ العنوان غير موجود ← **200 بقائمة فارغة** (المشغّل الأساسي يبقى وحده).
 - كاش 30 دقيقة + `stale-while-revalidate` مثل الحالي، و`X-Cache` للتشخيص.
 - حذف دوال السكربت القديمة (`extractHiddenInputs` / `scrapeKurdishServersForMovie` / `findMovieIdBy*`) من `server.js` و`api/proxy.js` بعد نقلها إلى `lib/servers.mjs`.
+
+**بيئة Vercel (الموقع الحيّ حسب اللوقز: `hwto-kurd.vercel.app`):**
+
+- `api/proxy.js` هو الخادم الحيّ اليوم، و`server.js` للتطوير المحلي — لذلك `lib/servers.mjs` **مشتركة بالضبط** بين الاثنين بلا تكرار، حتى يبقى السلوك متطابقاً.
+- **المهلة آمنة بلا تعديل `vercel.json`**: مع Fluid compute حدّ Vercel الأقصى 300 ث (Hobby وPro) ومهلة البروكسي 120 ث — بَجمة الـ 20 ث وفحوصات ~8 ث كدخل داخلها.
+- **كاش الحافة يحيد غلاء الفحص**: معالج `servers` يرجع أصلاً `s-maxage=180, stale-while-revalidate=60` ← التكرار خلال 3 دقائق ما بيدفعش تكلفة الفحص.
+- **الكاش داخل الذاكرة** (`titleIdCache` + كاش نتيجة الفحص) **مكسب إضافي وليس شرطاً**: كل استدعاء Vercel قد يكون instance جديد. لا نعتمد عليه — كاش الحافة هو الصحيح.
+- **تحذير `url.parse()` (DEP0169) في اللوق**: جاي من رانتايم Vercel نفسه (عملية `node:6`)؛ كودنا كامل كيستعمل WHATWG `new URL()` ← **ما كاين حتى تعديل في الريبو بسببه**.
+- **تصحيح README**: الجملة القائلة إن «كشف السيرفرات متوقف على Vercel وVidCore وحده» **قديمة** — `api/proxy.js` كينفّذ الكشف فعلاً. تُصحَّح عند التوثيق.
+- مجلد `lib/` ما كيتسرڤش كملف عام: الـ rewrite `/(.*)` → `/public/$1` يعني `/lib/...` يرجع 404 — بلا تسريب للمصدر.
 
 ### 3) الواجهة — الشريط السفلي (استبدال الشريط القديم)
 
@@ -141,7 +151,7 @@ export async function collectServers({ type, title, year, season, episode, tmdbi
 
 - أنماط جديدة في `components.css` على نمط المتغيّرات الحالية (`--surface-2`, `--line`, `--brand`, `--radius-lg`)، وحذف `.server-strip` / `.server-list` / `.server-pill` القديمة.
 - إضافة في `localization.js` (المفتاح = النص العربي في الـ markup):
-  `سيرفرات التشغيل` → ckb `ڕاژەکارەکانی بینين` / en `Playback servers`،
+  `سيرفرات التشغيل` → ckb `ڕاژەکارەکانی بینین` / en `Playback servers`،
   `الأساسي` → `سەرەکی` / `Primary`،
   `لا توجد سيرفرات بديلة` → `هیچ ڕاژەکارێکی جێگرەوە نییە` / `No alternate servers`.
 
@@ -161,11 +171,13 @@ export async function collectServers({ type, title, year, season, episode, tmdbi
    - `curl 'http://127.0.0.1:4173/api/TMDBCache.aspx?action=servers&title=Game%20of%20Thrones&type=tv&season=1&episode=1'`
    - التأكد أن كل رابط مرجوع يرجع 200 عند فحصه مرة ثانية، وأن ronemo/playerwish/vidfast **غائبين**.
 4. فحص يدوي في المتصفح: `#/watch/movie/438631?title=Dune` و`#/watch/tv/1399?title=Game%20of%20Thrones&season=1&episode=1` — الشريط السفلي ظاهر بالكردية، اللائحة مرقّمة، التبديل يبدّل المشغّل، تبديل الحلقة يحدّث اللائحة.
-5. `npm run qa` — **غير ممكن هنا**: ما فيه `node_modules` ولا `playwright-core` ولا Chromium. إن أردتَ تشغيله لاحقاً: `npm i -D playwright-core` + `CHROMIUM=/path/to/chrome npm run qa`.
+5. **مسار Vercel**: نفس أمرين curl يُطلَبان على `https://hwto-kurd.vercel.app/api/TMDBCache.aspx?...` **بعد نشرك أنت** (أنا ما ننشرش بلا إذنك) — للتأكد أن `api/proxy.js` راجع نفس الشكل.
+6. `npm run qa` — **غير ممكن هنا**: ما فيه `node_modules` ولا `playwright-core` ولا Chromium. إن أردتَ تشغيله لاحقاً: `npm i -D playwright-core` + `CHROMIUM=/path/to/chrome npm run qa`.
 
 ## المخاطر
 
-- **Sucuri WAF** على beenar يحجب بلا UA متصفح (مختبر: طلبات بلا UA رجعت connection reset). الحل: UA متصفح + إعادة محاولة واحدة + كاش 30 دقيقة.
+- **Sucuri WAF** على beenar يحجب بلا UA متصفح (مختبر: طلبات بلا UA رجعت connection reset). الحل: UA متصفح + إعادة محاولة واحدة + كاش الحافة 180 ث.
 - **روابط تتقتل مع الوقت** (playerwish مثلاً). الحل: الفحص الحي عند الطلب بدل قائمة ثابتة.
-- **ثقل الفحص**: بَجمة 8 ث + 12 رابط كحدّ أقصى + كاش — الشاشة ما تتوقفش، والسيرفرات الاختيارية أصلاً: الفشل = VidCore يضل وحده.
-- **Vercel**: `lib/servers.mjs` خارج `api/` بس الـ bundler كيجمع الـ imports عادي؛ ما كاين حتى مفتاح API.
+- **ثقل الفحص**: بَجمة 8 ث + 12 رابط كحدّ أقصى بالتوازي — الشاشة ما تتوقفش، والسيرفرات الاختيارية أصلاً: الفشل = VidCore يضل وحده.
+- **Vercel**: `lib/servers.mjs` خارج `api/` بس الـ bundler كيجمع الـ imports عادي؛ ما كاين حتى مفتاح API؛ حدّ المهلة 300 ث يكفي بمراحل.
+- **LCP/الاستجابة**: `action=servers` يبقى غير حرج (الواجهة كتنده عليه بعد الرسم، والمشغّل الأساسي ما كيستناهش).
