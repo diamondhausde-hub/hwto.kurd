@@ -1,3 +1,5 @@
+import { mintPlaybackToken, applyPlaybackToken } from './vidsrc-extractor.js';
+
 export default async function handler(req, res) {
     let targetUrl = Array.isArray(req.query?.url) ? req.query.url[0] : req.query?.url;
     
@@ -5,23 +7,23 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "Missing url parameter" });
     }
 
-    try {
-        // جلب صفحة المشغل مباشرة بنفس عنوان IP الخادم لتفادي قفل الـ IP
-        const response = await fetch(targetUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://shaheid4u.name/',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-            }
-        });
+    // الاعتماد كلياً على المتغيرات البيئية للحماية
+    const activeToken = process.env.SCRAPE_DO_TOKEN_1 || process.env.SCRAPE_DO_TOKEN;
+    
+    if (!activeToken) {
+        return res.status(500).json({ error: "API token is missing in Vercel environment variables" });
+    }
 
+    const scraperApiUrl = `http://api.scrape.do?token=${activeToken}&url=${encodeURIComponent(targetUrl)}&render=false`;
+
+    try {
+        const response = await fetch(scraperApiUrl);
+        
         if (!response.ok) {
-            return res.status(response.status).json({ error: `فشل جلب صفحة المشغل (${response.status})` });
+            return res.status(response.status).json({ error: "فشل الاتصال بخدمة الاستخراج" });
         }
 
         const html = await response.text();
-
-        // استخراج أجزاء البث الأربعة: ID، الوقت، المسار، التوكن
         const regex = /\|(\d{7,9})\|(\d{10})\|([a-zA-Z0-9_]+)\|([a-zA-Z0-9_\-]+)\|/;
         const match = html.match(regex);
 
@@ -34,9 +36,15 @@ export default async function handler(req, res) {
             const domain = new URL(targetUrl).origin;
             const rawM3u8 = `${domain}/stream/${token}/${path}/${timestamp}/${id}/master.m3u8`;
 
+            // The CDN serves /pl/... master.m3u8 only with a ?token=<jwt>
+            // minted from the same origin (see mintPlaybackToken). Mint it
+            // server-side here so the player gets a working URL.
+            const playbackToken = await mintPlaybackToken(rawM3u8);
+            const streamUrl = applyPlaybackToken(rawM3u8, playbackToken);
+
             return res.status(200).json({
                 success: true,
-                stream_url: rawM3u8,
+                stream_url: streamUrl,
                 source: "regex_decoder"
             });
         } else {
