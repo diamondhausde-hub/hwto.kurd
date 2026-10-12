@@ -8,13 +8,16 @@
  * vercel.json keeps the rewrite:
  *   /api/:path*  ->  /api/proxy?path=:path*
  * so /api/TMDBCache.aspx?action=... lands here with the query string intact.
+ *
+ * The alternate-servers lookup (Beenar + kurdcinama, health-checked) lives in
+ * lib/servers.mjs — shared with the local dev server (server.js).
  */
 
+import { collectServers } from '../lib/servers.mjs';
 
 const BASE = 'https://api.themoviedb.org/3';
 const LANGUAGE = process.env.TMDB_LANGUAGE || 'en-US';
 const TIMEOUT_MS = 15000;
-const SCRAPE_TIMEOUT_MS = 8000;
 const SERVERS_BUDGET_MS = 20000;
 const PAGE_SIZE = 20;
 const MAX_PAGES = 5;
@@ -146,139 +149,6 @@ function interleave(a, b) {
 
 const genreIds = (genres) =>
   Array.isArray(genres) ? genres.map((g) => g.id).filter(Number.isFinite).join(',') : '';
-
-
-/* ---------- Kurdish embed servers scraping (mirror of server.js) ---------- */
-
-async function fetchPageText(url, options) {
-  try {
-    const res = await fetch(url, {
-      redirect: 'follow',
-      ...options,
-      // Per-page deadline (or the caller's total budget) — a slow upstream
-      // must never hold the serverless request open.
-      signal: (options && options.signal) || AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; hwto.kurd/1.0)',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        ...(options && options.headers)
-      }
-    });
-    const text = await res.text();
-    return { ok: res.ok, status: res.status, text };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-}
-
-function extractHiddenInputs(html) {
-  const out = {};
-  for (const m of html.matchAll(/<input[^>]*type=["']hidden["'][^>]*>/gi)) {
-    const tag = m[0];
-    const name = (/name=["']([^"']+)["']/.exec(tag) || [])[1];
-    const value = (/value=["']([^"']*)["']/.exec(tag) || [])[1];
-    if (name) out[name] = value || '';
-  }
-  return out;
-}
-
-function extractServerOptions(html) {
-  const options = [];
-  for (const m of html.matchAll(/<option[^>]*value=["'](\d+)["'][^>]*>([^<]+)<\/option>/gi)) {
-    options.push({ value: m[1], label: m[2].trim() });
-  }
-  return options;
-}
-
-function extractIframeSrc(html) {
-  const m = /<iframe[^>]*src=["']([^"']+)["']/i.exec(html);
-  return m ? m[1] : null;
-}
-
-async function findMovieIdByTitle(title, tmdbid, signal) {
-  if (!title.trim() && !tmdbid) return null;
-  if (tmdbid) {
-    const located = await findMovieIdByTmdbId(String(tmdbid), title, signal);
-    if (located) return located;
-  }
-  if (!title.trim()) return null;
-  const r = await fetchPageText(`https://kurdcinama.com/Search.aspx?q=${encodeURIComponent(title.trim())}`, { signal });
-  if (!r || !r.ok || !r.text) return null;
-  const norm = (s) => String(s || '').toLowerCase().replace(/\(\d{4}\)/g, '').replace(/\s+/g, ' ').trim();
-  const target = norm(title).slice(0, 40);
-  const re = /details\.aspx\?movieid=(\d+)/g;
-  let m;
-  while ((m = re.exec(r.text))) {
-    const chunk = r.text.slice(m.index, m.index + 1500);
-    const t = chunk.match(/class="card__title">([^<]+)</);
-    if (t && target && norm(t[1]) === target) return m[1];
-  }
-  // Never guess a wrong movie — return null so the pills strip stays hidden.
-  return null;
-}
-
-async function findMovieIdByTmdbId(tmdbId, searchTitle, signal) {
-  if (!tmdbId) return null;
-  if (!searchTitle.trim()) searchTitle = '';
-  const searchUrl = searchTitle.trim()
-    ? `https://kurdcinama.com/Search.aspx?q=${encodeURIComponent(searchTitle.trim())}`
-    : `https://kurdcinama.com/Search.aspx`;
-  const r = await fetchPageText(searchUrl, { signal });
-  if (!r || !r.ok || !r.text) return null;
-  const ids = [];
-  let m;
-  const re = /"movieid[^\d]*(\d+)"/g;
-  while ((m = re.exec(r.text))) {
-    if (!ids.includes(m[1])) ids.push(m[1]);
-  }
-  if (!ids.length) {
-    const re2 = /moves-details\.aspx\?movieid=(\d+)|details\.aspx\?movieid=(\d+)/g;
-    while ((m = re2.exec(r.text))) {
-      const id = m[1] || m[2];
-      if (!ids.includes(id)) ids.push(id);
-    }
-  }
-  // Fetch each candidate details page and compare its embedded tmdbId.
-  for (const cand of ids.slice(0, 12)) {
-    const detail = await fetchPageText(`https://kurdcinama.com/moves-details.aspx?movieid=${cand}`, { signal });
-    if (!detail || !detail.ok || !detail.text) continue;
-    const hidden = detail.text.match(/<input[^>]*type=["']hidden["'][^>]*id=["']tmdbId["'][^>]*value=["'](\d+)["']/i);
-    if (hidden && hidden[1] === String(tmdbId)) return cand;
-  }
-  return null;
-}
-
-async function scrapeKurdishServers(movieid, signal) {
-  const pageUrl = `https://kurdcinama.com/online.aspx?movieid=${encodeURIComponent(movieid)}`;
-  const index = await fetchPageText(pageUrl, { signal });
-  if (!index || !index.ok || !index.text) return { error: 'تعذّر جلب صفحة المشغل' };
-
-  const options = extractServerOptions(index.text);
-  if (!options.length) return { error: 'لم يُعثر على سيرفرات في الصفحة' };
-
-  const servers = [];
-  for (const opt of options) {
-    const refreshed = await fetchPageText(pageUrl, { signal });
-    const hidden = refreshed && refreshed.text ? extractHiddenInputs(refreshed.text) : extractHiddenInputs(index.text);
-    const body = new URLSearchParams();
-    for (const [k, v] of Object.entries(hidden)) body.set(k, v);
-    body.set('__EVENTTARGET', 'ctl00$MainContent$DropDownList1');
-    body.set('__EVENTARGUMENT', '');
-    body.set('__LASTFOCUS', '');
-    body.set('ctl00$MainContent$DropDownList1', opt.value);
-    body.set('ctl00$MainContent$hiddenVideoUrl', hidden['ctl00$MainContent$hiddenVideoUrl'] || '');
-
-    const post = await fetchPageText(pageUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Referer': pageUrl },
-      body: body.toString(),
-      signal
-    });
-    const src = post && post.ok ? extractIframeSrc(post.text) : null;
-    if (src) servers.push({ key: opt.label.replace(/^\d+[-.)\s]*/, '').trim(), label: opt.label, url: src });
-  }
-  return { movieid, servers };
-}
 
 
 /* ---------- actions ---------- */
@@ -476,23 +346,29 @@ export default async function handler(req, res) {
       case 'movie': payload = await details(q, 'movie'); break;
       case 'tv': payload = await details(q, 'tv'); break;
       case 'servers': {
-        const signal = AbortSignal.timeout(SERVERS_BUDGET_MS);
-        const movieid = String(first(q.movieid) || '').trim();
-        if (movieid) { payload = await scrapeKurdishServers(movieid, signal); break; }
-        const title = String(first(q.title) || '').trim();
-        const tmdbId = String(first(q.tmdbid) || '').trim();
-        if (tmdbId) {
-          const foundId = await findMovieIdByTitle(title, tmdbId, signal);
-          payload = await scrapeKurdishServers(foundId || '', signal);
-          break;
+        const params = {
+          movieid: String(first(q.movieid) || '').trim(),
+          tmdbid: String(first(q.tmdbid) || '').trim(),
+          title: String(first(q.title) || '').trim(),
+          year: String(first(q.year) || '').trim(),
+          type: first(q.type) === 'tv' ? 'tv' : 'movie',
+          season: String(first(q.season) || '').trim(),
+          episode: String(first(q.episode) || '').trim()
+        };
+        if (!params.movieid && !params.tmdbid && !params.title) {
+          res.setHeader('Cache-Control', 'no-store');
+          res.status(400).json({ error: 'movieid, title or tmdbid is required for action=servers' });
+          return;
         }
-        if (title) {
-          const foundId = await findMovieIdByTitle(title, '', signal);
-          payload = await scrapeKurdishServers(foundId || '', signal);
-          break;
-        }
-        payload = { error: 'movieid, title or tmdbid is required for action=servers' };
-        break;
+        payload = await collectServers({ ...params, signal: AbortSignal.timeout(SERVERS_BUDGET_MS) });
+        res.setHeader(
+          'Cache-Control',
+          payload.servers.length
+            ? 's-maxage=1800, stale-while-revalidate=60'
+            : 's-maxage=300, stale-while-revalidate=60'
+        );
+        res.status(200).json(payload);
+        return;
       }
       default:
         res.setHeader('Cache-Control', 'no-store');

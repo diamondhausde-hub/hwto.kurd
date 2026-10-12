@@ -57,16 +57,21 @@ export async function mount(params, view, { signal }) {
         <button class="btn btn-ghost" type="button" data-back>رجوع</button>
       </div>
 
-      <div class="watch-frame">
-        <iframe
-          src="${attr(url)}"
-          title="مشغّل ${attr(title || 'الفيديو')}"
-          allow="autoplay; fullscreen; picture-in-picture; encrypted-media; accelerometer; gyroscope; clipboard-write; web-share"
-          referrerpolicy="origin-when-cross-origin"></iframe>
-        <div class="subtitle-overlay" id="subtitle-overlay" hidden>
-          <span class="subtitle-cue" id="subtitle-cue"></span>
+      <div class="server-bar" id="server-bar" hidden aria-label="سيرفرات التشغيل">
+          <span class="server-bar-label">سيرفرات التشغيل</span>
+          <div class="server-bar-list" id="server-bar-list"></div>
         </div>
-      </div>
+
+        <div class="watch-frame">
+          <iframe
+            src="${attr(url)}"
+            title="مشغّل ${attr(title || 'الفيديو')}"
+            allow="autoplay; fullscreen; picture-in-picture; encrypted-media; accelerometer; gyroscope; clipboard-write; web-share"
+            referrerpolicy="origin-when-cross-origin"></iframe>
+          <div class="subtitle-overlay" id="subtitle-overlay" hidden>
+            <span class="subtitle-cue" id="subtitle-cue"></span>
+          </div>
+        </div>
 
       <div class="subtitle-bar" id="subtitle-bar" hidden>
         <div class="subtitle-group">
@@ -94,11 +99,6 @@ export async function mount(params, view, { signal }) {
         </button>
         <button class="btn btn-ghost" type="button" data-back>رجوع</button>
         ${media === 'tv' ? renderEpisodeNav(params.id, currentSeason, currentEpisode) : ''}
-      </div>
-
-      <div class="server-strip" id="server-strip" hidden>
-        <span class="server-strip-label">سيرفر التشغيل:</span>
-        <div class="server-list" id="server-list" role="group" aria-label="سيرفرات التشغيل البديلة"></div>
       </div>
 
       <div class="download-box" id="download-box" hidden>
@@ -137,7 +137,7 @@ export async function mount(params, view, { signal }) {
   wireBack(view);
   wireDownloadAndCopy(view, url);
   if (media === 'tv') wireTvControls(view, params);
-  wireAlternateServers(view, params, media);
+  wireServerBar(view, params, media);
 
   // Local WebVTT overlay (movies only — the index has no TV entries).
   if (subtitles) subtitles.destroy();
@@ -146,42 +146,116 @@ export async function mount(params, view, { signal }) {
   updateDocTitle(title, media, currentSeason, currentEpisode);
 }
 
-async function wireAlternateServers(root, params, media) {
-  const strip = root.querySelector('#server-strip');
-  const list = root.querySelector('#server-list');
-  if (!strip || !list) return;
-  if (media !== 'movie') {
-    strip.hidden = true;
+/* ------------------------------------------------------------------ *
+ * Playback servers — a simple horizontal bar above the player with one *
+ * small numbered button per server. No panels, no toggles, no overlay. *
+ * Titled "سيرفرات التشغيل" (Kurdish: ڕاژەکارەکانی بینین). Number 1 is  *
+ * always VidCore (the primary embed), then the alternates resolved and *
+ * health-checked server-side by lib/servers.mjs.                        *
+ * ------------------------------------------------------------------ */
+
+const PRIMARY = { key: 'vidcore', label: 'VidCore', source: 'vidcore' };
+
+function serverUrl(entry, params, media) {
+  if (entry.source === 'vidcore') return playerUrl({ ...params, type: media });
+  return entry.url;
+}
+
+function renderServerBar(list, servers, selectedKey) {
+  list.innerHTML = servers
+    .map((srv, i) => {
+      const active = srv.key === selectedKey || (!selectedKey && i === 0);
+      return `<button type="button" class="server-btn${active ? ' is-active' : ''}" data-server-key="${attr(srv.key)}" title="${attr(srv.label)}"${active ? ' aria-current="true"' : ''}>${i + 1}</button>`;
+    })
+    .join('');
+}
+
+/** Fetch the servers, then draw the numbered buttons. */
+async function refreshServerBar(root, params, media) {
+  const bar = root.querySelector('#server-bar');
+  const list = root.querySelector('#server-bar-list');
+  if (!bar || !list) return;
+
+  if (ctx) ctx.selectedServerKey = ctx.selectedServerKey || 'vidcore';
+  bar.hidden = false;
+
+  let alternates = [];
+  try {
+    const data = await api.getServers({
+      title: params.title || '',
+      tmdbid: params.id,
+      type: media,
+      year: params.year || '',
+      season: media === 'tv' ? params.season : undefined,
+      episode: media === 'tv' ? params.episode : undefined,
+      signal: ctx && ctx.signal
+    });
+    alternates = (data && data.servers) || [];
+  } catch {
+    // Servers are optional — the primary VidCore player keeps working.
+  }
+  if (root !== (ctx && ctx.view)) return; // view was replaced while we fetched
+
+  // Same host can carry several distinct embeds — keep every button unique.
+  const seenKeys = new Map();
+  const servers = [
+    PRIMARY,
+    ...alternates.map((s) => {
+      const n = (seenKeys.get(s.key) || 0) + 1;
+      seenKeys.set(s.key, n);
+      return n === 1 ? s : { ...s, key: `${s.key}#${n}` };
+    })
+  ];
+  // No alternates at all: the bar is pointless, VidCore alone keeps working.
+  if (!alternates.length) {
+    bar.hidden = true;
+    list.innerHTML = '';
+    if (ctx) ctx.servers = null;
     return;
   }
+  if (ctx) ctx.servers = servers;
+  renderServerBar(list, servers, (ctx && ctx.selectedServerKey) || 'vidcore');
+}
 
-  try {
-    const data = await api.getServers({ title: params.title || '', tmdbid: params.id });
-    const servers = (data && data.servers) || [];
-    if (!servers.length) return;
+function pickServer(root, params, media, key) {
+  const servers = (ctx && ctx.servers) || [];
+  const entry = servers.find((s) => s.key === key) || servers[0] || PRIMARY;
+  const url = serverUrl(entry, params, media);
+  if (!url) return;
+  if (ctx) ctx.selectedServerKey = entry.key;
 
-    strip.hidden = false;
-    list.innerHTML = servers
-      .map(
-        (srv) =>
-          `<button type="button" class="server-pill" data-url="${attr(srv.url)}">${escapeHtml(srv.label)}</button>`
-      )
-      .join('');
+  const iframe = root.querySelector('.watch-frame iframe');
+  if (iframe) iframe.src = url;
 
-    list.addEventListener('click', (e) => {
-      const pill = e.target.closest('.server-pill');
-      if (!pill) return;
-      const url = pill.getAttribute('data-url');
-      if (!url) return;
-      list.querySelectorAll('.server-pill').forEach((p) => p.classList.toggle('is-active', p === pill));
-      const iframe = root.querySelector('.watch-frame iframe');
-      if (iframe) iframe.src = url;
-      const streamInput = root.querySelector('#stream-url-input');
-      if (streamInput) streamInput.value = url;
+  const streamInput = root.querySelector('#stream-url-input');
+  if (streamInput) streamInput.value = url;
+
+  const list = root.querySelector('#server-bar-list');
+  if (list) {
+    list.querySelectorAll('.server-btn').forEach((btn) => {
+      const isActive = btn.getAttribute('data-server-key') === entry.key;
+      btn.classList.toggle('is-active', isActive);
+      if (isActive) btn.setAttribute('aria-current', 'true');
+      else btn.removeAttribute('aria-current');
     });
-  } catch {
-    // Servers are optional — the primary VidCore player stays active.
   }
+}
+
+function wireServerBar(root, params, media) {
+  const bar = root.querySelector('#server-bar');
+  const list = root.querySelector('#server-bar-list');
+  if (!bar || !list) return;
+
+  if (ctx) ctx.selectedServerKey = 'vidcore';
+
+  // Read ctx.params at click time — an episode switch replaces the params object.
+  list.addEventListener('click', (e) => {
+    const btn = e.target.closest('.server-btn');
+    if (!btn) return;
+    pickServer(root, (ctx && ctx.params) || params, media, btn.getAttribute('data-server-key'));
+  });
+
+  refreshServerBar(root, params, media);
 }
 
 function wireDownloadAndCopy(root, initialUrl) {
@@ -457,11 +531,16 @@ function wireTvControls(root, params) {
         type: 'tv',
         id: params.id,
         title: params.title,
+        year: params.year,
         season: String(season),
         episode: String(episode)
       },
       { replace: true }
     );
+
+    // Alternates are per-episode on Beenar — reset to VidCore and re-fetch.
+    if (ctx) ctx.selectedServerKey = 'vidcore';
+    refreshServerBar(root, params, 'tv');
   }
 }
 
@@ -499,6 +578,10 @@ export function onRoute(params) {
 
     const streamInput = ctx.view.querySelector('#stream-url-input');
     if (streamInput) streamInput.value = nextUrl;
+
+    // Back to the primary player and re-fetch per-episode alternates.
+    ctx.selectedServerKey = 'vidcore';
+    refreshServerBar(ctx.view, params, params.type === 'tv' ? 'tv' : 'movie');
 
     const media = params.type === 'tv' ? 'tv' : 'movie';
     const s = Number(params.season) || 1;

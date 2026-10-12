@@ -86,12 +86,12 @@ export async function mount(params, view, { signal }) {
   if (signal.aborted) return;
 
   // Watch button uses the TMDB id directly — vidcore.io accepts it as-is.
-  const watchLink = watchHref(type, id, item.title);
+  const year = yearOf(item.releaseDate);
+  const watchLink = watchHref(type, id, item.title, year);
 
   const bg = backdropUrl(item);
   const poster = posterUrl(item);
   const genres = genreNames(item.genreIds);
-  const year = yearOf(item.releaseDate);
   const hasVotes = item.voteCount > 0;
 
   view.innerHTML = `
@@ -193,7 +193,7 @@ export async function mount(params, view, { signal }) {
   }
 
   if (type === 'tv') {
-    wireDetailsTvSeasons(view, id, item.title);
+    wireDetailsTvSeasons(view, id, item.title, year);
   }
 }
 
@@ -237,7 +237,7 @@ function renderTvDetailsSeasons(id, title) {
         ${episodes
           .map(
             (ep) => `
-          <a class="detail-ep-card" href="${attr(buildHash({ name: 'watch', type: 'tv', id, title, season: '1', episode: String(ep) }))}">
+          <a class="detail-ep-card" href="${attr(buildHash({ name: 'watch', type: 'tv', id, title, year, season: '1', episode: String(ep) }))}">
             <span class="detail-ep-badge">حلقة ${ep}</span>
             <span class="detail-ep-play">▶ مشاهدة</span>
           </a>`
@@ -248,7 +248,7 @@ function renderTvDetailsSeasons(id, title) {
   `;
 }
 
-function wireDetailsTvSeasons(root, id, title) {
+function wireDetailsTvSeasons(root, id, title, year) {
   const tabs = root.querySelectorAll('[data-detail-season]');
   const grid = root.querySelector('#detail-episodes-grid');
   if (!grid) return;
@@ -261,7 +261,7 @@ function wireDetailsTvSeasons(root, id, title) {
     grid.innerHTML = episodes
       .map(
         (ep) => `
-      <a class="detail-ep-card" href="${attr(buildHash({ name: 'watch', type: 'tv', id, title, season: String(activeSeason), episode: String(ep) }))}">
+      <a class="detail-ep-card" href="${attr(buildHash({ name: 'watch', type: 'tv', id, title, year, season: String(activeSeason), episode: String(ep) }))}">
         <span class="detail-ep-badge">حلقة ${ep}</span>
         <span class="detail-ep-play">▶ مشاهدة</span>
       </a>`
@@ -288,14 +288,23 @@ function wireDetailsTvSeasons(root, id, title) {
       const epInput = root.querySelector('#detail-jump-e');
       const s = Math.max(1, Number(sInput ? sInput.value : 1) || 1);
       const ep = Math.max(1, Number(epInput ? epInput.value : 1) || 1);
-      navigate(buildHash({ name: 'watch', type: 'tv', id, title, season: String(s), episode: String(ep) }));
+      navigate(buildHash({ name: 'watch', type: 'tv', id, title, year, season: String(s), episode: String(ep) }));
     });
   }
 }
 
-/** Build a hash link to the watch page using the TMDB id. */
-function watchHref(type, tmdbId, title) {
-  return buildHash({ name: 'watch', type, id: tmdbId, title: title || '', season: type === 'tv' ? '1' : '', episode: type === 'tv' ? '1' : '' });
+/** Build a hash link to the watch page using the TMDB id.
+ *  `year` travels along so the proxy can sharpen the Beenar title match. */
+function watchHref(type, tmdbId, title, year) {
+  return buildHash({
+    name: 'watch',
+    type,
+    id: tmdbId,
+    title: title || '',
+    year: year || '',
+    season: type === 'tv' ? '1' : '',
+    episode: type === 'tv' ? '1' : ''
+  });
 }
 
 function merge(type, id, detail, fallback) {

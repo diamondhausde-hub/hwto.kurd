@@ -34,12 +34,13 @@ function walk(dir) {
 
 const allFiles = walk(ROOT).filter((f) => !f.includes(`${path.sep}node_modules${path.sep}`));
 const jsFiles = allFiles.filter((f) => f.endsWith('.js') || f.endsWith('.mjs'));
-// Server-side code lives in scripts/, api/ and server.js: it runs in Node and
-// may legitimately call fetch() (proxying, scraping, test harness). The layer
-// rule and the secret scan apply to the browser app plus human-facing docs.
+// Server-side code lives in scripts/, api/, lib/ and server.js: it runs in
+// Node and may legitimately call fetch() (proxying, scraping, test harness).
+// The layer rule and the secret scan apply to the browser app plus human-facing docs.
 const BACKEND_PREFIXES = [
   path.join(ROOT, 'scripts') + path.sep,
   path.join(ROOT, 'api') + path.sep,
+  path.join(ROOT, 'lib') + path.sep,
   path.join(ROOT, 'server.js')
 ];
 const frontendFiles = (list) => list.filter((f) => !BACKEND_PREFIXES.some((b) => f === b || f.startsWith(b)));
@@ -120,6 +121,7 @@ ok('no API keys or tokens committed');
 const expected = [
   'README.md',
   'server.js',
+  'lib/servers.mjs',
   'package.json',
   'scripts/check.js',
   'scripts/qa.mjs',
