@@ -1,3 +1,5 @@
+import { mintPlaybackToken, applyPlaybackToken } from './vidsrc-extractor.js';
+
 export default async function handler(req, res) {
     let targetUrl = Array.isArray(req.query?.url) ? req.query.url[0] : req.query?.url;
     
@@ -34,9 +36,15 @@ export default async function handler(req, res) {
             const domain = new URL(targetUrl).origin;
             const rawM3u8 = `${domain}/stream/${token}/${path}/${timestamp}/${id}/master.m3u8`;
 
+            // The CDN serves /pl/... master.m3u8 only with a ?token=<jwt>
+            // minted from the same origin (see mintPlaybackToken). Mint it
+            // server-side here so the player gets a working URL.
+            const playbackToken = await mintPlaybackToken(rawM3u8);
+            const streamUrl = applyPlaybackToken(rawM3u8, playbackToken);
+
             return res.status(200).json({
                 success: true,
-                stream_url: rawM3u8,
+                stream_url: streamUrl,
                 source: "regex_decoder"
             });
         } else {

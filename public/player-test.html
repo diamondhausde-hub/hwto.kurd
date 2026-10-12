@@ -15,11 +15,11 @@
   </style>
 </head>
 <body>
-  <h1>مشغّل الاختبار (HLS)</h1>
+  <h1>مشغّل الاختبار (HLS عبر /api/fastvid)</h1>
   <video id="player" controls playsinline></video>
   <div id="status">جاهز.</div>
 
-  <label for="src">رابط m3u8:</label>
+  <label for="src">رابط m3u8 (يُمرَّر عبر /api/fastvid):</label>
   <input id="src" type="text" value="https://fastvip.space/stream/EqnluuuCFSg0bOTwNr4KYw/kjhhiuahiuhgihdf/1791837698/75731317/master.m3u8" />
   <button id="play">تشغيل</button>
 
@@ -31,13 +31,18 @@
     const playBtn = document.getElementById('play');
     let hls = null;
 
+    // مضيف المشغّل — الـ Referer الذي يتطلبه الـ CDN (نفس مسار attachHls الحقيقي)
+    const FROM = 'https://fastvip.space';
+    const proxy = (url) => '/api/fastvid?url=' + encodeURIComponent(url) + '&from=' + encodeURIComponent(FROM);
+
     function load(src) {
       if (hls) { hls.destroy(); hls = null; }
       statusEl.textContent = 'جارٍ التحميل…';
+      const proxied = proxy(src);
 
       if (window.Hls && Hls.isSupported()) {
         hls = new Hls();
-        hls.loadSource(src);
+        hls.loadSource(proxied);
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -53,7 +58,7 @@
           }
         });
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = src;
+        video.src = proxied;
         statusEl.textContent = 'تشغيل أصلي (Safari/iOS).';
       } else {
         statusEl.textContent = 'هذا المتصفح لا يدعم HLS.';

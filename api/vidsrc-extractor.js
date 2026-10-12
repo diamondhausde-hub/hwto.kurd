@@ -438,7 +438,7 @@ export async function resolveStreamUrls(payload) {
  * egress IP for both mint and manifest fetch. Returns '' when minting fails,
  * because a tokenless URL is still worth handing to the player (it may play).
  */
-async function mintPlaybackToken(playlistUrl) {
+export async function mintPlaybackToken(playlistUrl) {
   try {
     const { origin } = new URL(playlistUrl);
     const res = await fetch(`${origin}/generate.php`, {
@@ -457,7 +457,7 @@ async function mintPlaybackToken(playlistUrl) {
 }
 
 /** Append ?token=<jwt> to a playlist URL so the CDN serves it. */
-function applyPlaybackToken(playlistUrl, token) {
+export function applyPlaybackToken(playlistUrl, token) {
   if (!token) return playlistUrl;
   try {
     const u = new URL(playlistUrl);
