@@ -14,6 +14,11 @@ const UPSTREAM_HOST = 'kurdcinama.com';
 const API_PREFIX = '/api/';
 const API_TTL = 180 * 1000;
 const UPSTREAM_TIMEOUT = 20000;
+<<<<<<< HEAD
+=======
+// Alternate servers are looked up, scraped and health-checked inside
+// lib/servers.mjs; this is the total budget one HTTP request may spend there.
+>>>>>>> 584632c2c2d34a8eadb3791d108c3e3e0c2b211e
 const SERVERS_BUDGET_MS = 20000;
 const MAX_API_RESPONSE = 2 * 1024 * 1024;
 const MAX_CACHE_ENTRIES = 400;
@@ -164,6 +169,13 @@ function checkRateLimit(ip) {
   return true;
 }
 
+<<<<<<< HEAD
+=======
+/* Alternate playback servers ------------------------------------------- *
+ * The lookup (Beenar title search + kurdcinama scrape) and the liveness
+ * filter live in lib/servers.mjs so this file and api/proxy.js share them. */
+
+>>>>>>> 584632c2c2d34a8eadb3791d108c3e3e0c2b211e
 function isAllowedApiPath(pathname, search) {
   if (pathname !== '/api/TMDBCache.aspx') return false;
   const params = new URLSearchParams(search);
@@ -193,6 +205,13 @@ async function proxyApi(req, res, reqUrl, isHead = false) {
     return;
   }
 
+<<<<<<< HEAD
+=======
+  // Alternate playback servers: Beenar (movies + series) merged with the
+  // kurdcinama.com player page (movies only), health-checked server-side.
+  // shape: /api/TMDBCache.aspx?action=servers&title=Dune&type=movie&year=2021
+  //        /api/TMDBCache.aspx?action=servers&title=..&type=tv&season=1&episode=2
+>>>>>>> 584632c2c2d34a8eadb3791d108c3e3e0c2b211e
   if (new URLSearchParams(reqUrl.search).get('action') === 'servers') {
     const search = new URLSearchParams(reqUrl.search);
     const params = {
@@ -206,11 +225,20 @@ async function proxyApi(req, res, reqUrl, isHead = false) {
     };
     const hasLookup = Boolean(params.movieid || params.tmdbid || params.title);
     if (!hasLookup) {
+<<<<<<< HEAD
+=======
+      // Malformed request: no identifier of any kind.
+>>>>>>> 584632c2c2d34a8eadb3791d108c3e3e0c2b211e
       sendJson(req, res, 400, { error: 'movieid, title or tmdbid is required for action=servers' }, { 'Cache-Control': 'no-store' }, isHead);
       return;
     }
     try {
       const result = await collectServers({ ...params, signal: AbortSignal.timeout(SERVERS_BUDGET_MS) });
+<<<<<<< HEAD
+=======
+      // A title that is simply absent upstream is a valid answer, not an error:
+      // the VidCore player keeps working with no alternates at all.
+>>>>>>> 584632c2c2d34a8eadb3791d108c3e3e0c2b211e
       sendJson(req, res, 200, result, {
         'Cache-Control': result.servers.length
           ? 'public, max-age=1800, stale-while-revalidate=60'
