@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>مشغّل الاختبار — hwto.kurd</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f1115; color: #eee; margin: 0; padding: 24px; }
+    h1 { font-size: 20px; margin: 0 0 16px; }
+    video { width: 100%; max-width: 900px; background: #000; display: block; border-radius: 8px; }
+    #status { margin-top: 12px; font-size: 14px; color: #9aa; }
+    label { display: block; margin: 16px 0 6px; font-size: 14px; color: #9aa; }
+    input { width: 100%; max-width: 900px; padding: 10px; border-radius: 6px; border: 1px solid #333; background: #161922; color: #eee; font-size: 13px; box-sizing: border-box; }
+    button { margin-top: 10px; padding: 10px 18px; border: 0; border-radius: 6px; background: #3b82f6; color: #fff; font-size: 14px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>مشغّل الاختبار (HLS)</h1>
+  <video id="player" controls playsinline></video>
+  <div id="status">جاهز.</div>
+
+  <label for="src">رابط m3u8:</label>
+  <input id="src" type="text" value="https://fastvip.space/stream/EqnluuuCFSg0bOTwNr4KYw/kjhhiuahiuhgihdf/1791837698/75731317/master.m3u8" />
+  <button id="play">تشغيل</button>
+
+  <script src="/vendor/hls.min.js"></script>
+  <script>
+    const video = document.getElementById('player');
+    const statusEl = document.getElementById('status');
+    const srcInput = document.getElementById('src');
+    const playBtn = document.getElementById('play');
+    let hls = null;
+
+    function load(src) {
+      if (hls) { hls.destroy(); hls = null; }
+      statusEl.textContent = 'جارٍ التحميل…';
+
+      if (window.Hls && Hls.isSupported()) {
+        hls = new Hls();
+        hls.loadSource(src);
+        hls.attachMedia(video);
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          statusEl.textContent = 'تم تحميل البث — اضغط تشغيل.';
+        });
+
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          statusEl.textContent = 'خطأ HLS: ' + data.type + ' / ' + data.details;
+          if (data.fatal) {
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+            else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+            else hls.destroy();
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = src;
+        statusEl.textContent = 'تشغيل أصلي (Safari/iOS).';
+      } else {
+        statusEl.textContent = 'هذا المتصفح لا يدعم HLS.';
+      }
+    }
+
+    playBtn.addEventListener('click', () => load(srcInput.value.trim()));
+    load(srcInput.value.trim());
+  </script>
+</body>
+</html>
