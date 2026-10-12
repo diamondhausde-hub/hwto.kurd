@@ -2,6 +2,22 @@
   "version": 2,
   "rewrites": [
     {
+      "source": "/api/fastvid",
+      "destination": "/api/fastvid"
+    },
+    {
+      "source": "/api/scraper",
+      "destination": "/api/scraper"
+    },
+    {
+      "source": "/api/vidsrc-extractor",
+      "destination": "/api/vidsrc-extractor"
+    },
+    {
+      "source": "/api/shahid4u-extractor",
+      "destination": "/api/shahid4u-extractor"
+    },
+    {
       "source": "/api/:path*",
       "destination": "/api/proxy?path=:path*"
     },
