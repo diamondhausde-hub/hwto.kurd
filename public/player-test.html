@@ -12,16 +12,17 @@
     label { display: block; margin: 16px 0 6px; font-size: 14px; color: #9aa; }
     input { width: 100%; max-width: 900px; padding: 10px; border-radius: 6px; border: 1px solid #333; background: #161922; color: #eee; font-size: 13px; box-sizing: border-box; }
     button { margin-top: 10px; padding: 10px 18px; border: 0; border-radius: 6px; background: #3b82f6; color: #fff; font-size: 14px; cursor: pointer; }
+    button:disabled { background: #555; cursor: not-allowed; }
   </style>
 </head>
 <body>
-  <h1>مشغّل الاختبار (HLS عبر /api/fastvid)</h1>
+  <h1>مشغّل الاختبار (استخراج وتشغيل تلقائي)</h1>
   <video id="player" controls playsinline></video>
-  <div id="status">جاهز.</div>
+  <div id="status">جاهز للاختبار.</div>
 
-  <label for="src">رابط m3u8 (يُمرَّر عبر /api/fastvid):</label>
-  <input id="src" type="text" value="https://fastvip.space/stream/EqnluuuCFSg0bOTwNr4KYw/kjhhiuahiuhgihdf/1791837698/75731317/master.m3u8" />
-  <button id="play">تشغيل</button>
+  <label for="src">ضع رابط المشغل (مثل fastvip.space/e/...) أو رابط m3u8 مباشر:</label>
+  <input id="src" type="text" value="https://fastvip.space/e/uw2xnhcfket2" />
+  <button id="play">استخراج وتشغيل</button>
 
   <script src="/vendor/hls.min.js"></script>
   <script>
@@ -31,14 +32,15 @@
     const playBtn = document.getElementById('play');
     let hls = null;
 
-    // مضيف المشغّل — الـ Referer الذي يتطلبه الـ CDN (نفس مسار attachHls الحقيقي)
-    const FROM = 'https://fastvip.space';
-    const proxy = (url) => '/api/fastvid?url=' + encodeURIComponent(url) + '&from=' + encodeURIComponent(FROM);
+    const proxy = (url) => {
+      const fromHost = new URL(url).origin;
+      return '/api/fastvid?url=' + encodeURIComponent(url) + '&from=' + encodeURIComponent(fromHost);
+    };
 
-    function load(src) {
+    function playStream(m3u8Url) {
       if (hls) { hls.destroy(); hls = null; }
-      statusEl.textContent = 'جارٍ التحميل…';
-      const proxied = proxy(src);
+      statusEl.textContent = 'جارٍ تحميل الفيديو عبر البروكسي…';
+      const proxied = proxy(m3u8Url);
 
       if (window.Hls && Hls.isSupported()) {
         hls = new Hls();
@@ -46,7 +48,8 @@
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          statusEl.textContent = 'تم تحميل البث — اضغط تشغيل.';
+          statusEl.textContent = 'تم تحميل البث بنجاح — الفيديو جاهز للتشغيل!';
+          video.play().catch(() => {});
         });
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -65,8 +68,38 @@
       }
     }
 
-    playBtn.addEventListener('click', () => load(srcInput.value.trim()));
-    load(srcInput.value.trim());
+    async function handleStart() {
+      const rawUrl = srcInput.value.trim();
+      if (!rawUrl) return;
+
+      // إذا كان الرابط m3u8 نرسله مباشرة
+      if (rawUrl.includes('.m3u8')) {
+        playStream(rawUrl);
+        return;
+      }
+
+      // إذا كان رابط صفحة تضمين (embed)، نستخرج رابط m3u8 حي أولاً
+      statusEl.textContent = 'جارٍ استخراج رابط البث المباشر من السيرفر…';
+      playBtn.disabled = true;
+
+      try {
+        const res = await fetch('/api/shahid4u-extractor?url=' + encodeURIComponent(rawUrl));
+        const data = await res.json();
+
+        if (data.success && data.stream_url) {
+          statusEl.textContent = 'تم الاستخراج بنجاح، جاري بدء البث…';
+          playStream(data.stream_url);
+        } else {
+          statusEl.textContent = 'فشل الاستخراج: ' + (data.error || 'خطأ غير معروف');
+        }
+      } catch (err) {
+        statusEl.textContent = 'تعذر الاتصال بالمستخرج: ' + err.message;
+      } finally {
+        playBtn.disabled = false;
+      }
+    }
+
+    playBtn.addEventListener('click', handleStart);
   </script>
 </body>
 </html>
