@@ -658,6 +658,37 @@ export async function getSubtitleText({ type = 'movie', id, lang, signal } = {})
   return res.text();
 }
 
+/**
+ * Extract a direct HLS stream URL from a Shahid4u / fastvip embed page.
+ * Proxy hits /api/shahid4u-extractor, which uses Scrape.do to read the page
+ * and regex out the tokenised master.m3u8. Returns { stream_url }.
+ */
+export async function getShahid4uStream(embedUrl, { signal } = {}) {
+  if (!embedUrl) {
+    throw new ApiError('رابط صفحة الشاهد فور يو غير مكتمل', { code: 'bad-args', retriable: false });
+  }
+  const url = `/api/shahid4u-extractor?url=${encodeURIComponent(embedUrl)}`;
+  const res = await fetch(url, {
+    signal,
+    headers: { Accept: 'application/json' }
+  }).catch((err) => {
+    throw new ApiError(err && err.message ? err.message : 'تعذّر الاتصال بخدمة الاستخراج', {
+      code: 'network',
+      retriable: true
+    });
+  });
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data || !data.stream_url) {
+    throw new ApiError((data && data.error) || 'لم يتم العثور على رابط البث', {
+      code: 'extract',
+      status: res.status,
+      retriable: false
+    });
+  }
+  return data;
+}
+
 export const api = {
   getTrending,
   getUpcoming,
@@ -669,5 +700,6 @@ export const api = {
   getDetail,
   getServers,
   getSubtitleIndex,
-  getSubtitleText
+  getSubtitleText,
+  getShahid4uStream
 };

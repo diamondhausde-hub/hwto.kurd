@@ -164,7 +164,7 @@ export async function mount(params, view, { signal }) {
           </div>
         </div>
 
-        ${type === 'tv' ? renderTvDetailsSeasons(id, item.title) : ''}
+        ${type === 'tv' ? renderTvDetailsSeasons(id, item.title, year) : ''}
 
         ${
           related.length
@@ -197,7 +197,7 @@ export async function mount(params, view, { signal }) {
   }
 }
 
-function renderTvDetailsSeasons(id, title) {
+function renderTvDetailsSeasons(id, title, year) {
   const structure = getTvSeriesStructure(id, 1, 0);
   const seasons = structure.seasons;
   const episodes = structure.episodes;

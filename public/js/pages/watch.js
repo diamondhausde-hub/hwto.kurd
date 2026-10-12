@@ -10,9 +10,11 @@ import { escapeHtml, attr, mediaLabel, mediaPlural } from '../utils.js';
 import { getTvSeriesStructure, PLAYER_SERVERS } from '../config.js';
 import { api } from '../api.js';
 import { attachSubtitles } from '../subtitles.js';
+import { attachHls } from '../hls.js';
 
 let ctx = null;
 let subtitles = null;
+let hlsPlayer = null;
 
 /** Build player embed URL using the primary VidCore server. */
 function playerUrl(params) {
@@ -24,6 +26,64 @@ function playerUrl(params) {
   return media === 'tv' ? server.tvUrl(id, s, e) : server.movieUrl(id);
 }
 
+/** Tear down the native HLS player (if any) and restore the iframe embed. */
+function destroyNativePlayer() {
+  if (hlsPlayer) {
+    try { hlsPlayer.destroy(); } catch { /* already gone */ }
+    hlsPlayer = null;
+  }
+}
+
+/**
+ * Swap the iframe for a native <video> and start HLS playback of `m3u8Url`.
+ * `from` is the referer host the CDN requires; the fastvid proxy reads it.
+ */
+async function playNative(root, m3u8Url, { from, signal } = {}) {
+  const frame = root.querySelector('.watch-frame');
+  const iframe = frame && frame.querySelector('iframe');
+  if (!frame || !m3u8Url) return;
+
+  destroyNativePlayer();
+  if (iframe) iframe.hidden = true;
+
+  let video = frame.querySelector('video');
+  if (!video) {
+    video = document.createElement('video');
+    video.controls = true;
+    video.playsInline = true;
+    video.setAttribute('playsinline', '');
+    frame.insertBefore(video, frame.firstChild);
+  }
+  video.hidden = false;
+
+  try {
+    hlsPlayer = await attachHls(video, m3u8Url, { from, signal });
+  } catch (err) {
+    ui.showToast('تعذّر تشغيل البث على هذا المتصفح');
+    video.hidden = true;
+    if (iframe) iframe.hidden = false;
+  }
+}
+
+/**
+ * Resolve a stream via /api/shahid4u-extractor and play it natively.
+ * `embedUrl` is the shahid4u/fastvip embed page the extractor needs.
+ */
+async function playViaShahid4u(root, embedUrl, { signal } = {}) {
+  if (!embedUrl) return;
+  ui.showToast('جارٍ استخراج رابط البث…');
+  try {
+    const data = await api.getShahid4uStream(embedUrl, { signal });
+    const from = (() => { try { return new URL(embedUrl).origin; } catch { return ''; } })();
+    await playNative(root, data.stream_url, { from, signal });
+    const streamInput = root.querySelector('#stream-url-input');
+    if (streamInput) streamInput.value = data.stream_url;
+  } catch (err) {
+    if (err && err.name === 'AbortError') return;
+    ui.showToast('تعذّر استخراج البث من شاهد فور يو');
+  }
+}
+
 export async function mount(params, view, { signal }) {
   ctx = { view, params, signal };
 
@@ -32,6 +92,9 @@ export async function mount(params, view, { signal }) {
   const currentSeason = Number(params.season) || 1;
   const currentEpisode = Number(params.episode) || 1;
   const url = playerUrl(params);
+
+  // Tear down the previous native player before re-rendering the frame.
+  destroyNativePlayer();
 
   const detailHref = buildHash({ name: 'details', type: media, id: params.id });
 
@@ -155,10 +218,22 @@ export async function mount(params, view, { signal }) {
  * ------------------------------------------------------------------ */
 
 const PRIMARY = { key: 'vidcore', label: 'VidCore', source: 'vidcore' };
+// Shahid4u: resolved server-side by /api/shahid4u-extractor, played natively
+// via hls.js (the embed page is only an input to the extractor, never shown).
+const SHAHID4U = { key: 'shahid4u', label: 'شاهد فور يو', source: 'shahid4u' };
 
 function serverUrl(entry, params, media) {
   if (entry.source === 'vidcore') return playerUrl({ ...params, type: media });
   return entry.url;
+}
+
+/** The fastvip/shahid4u embed page URL for this title (extractor input). */
+function shahid4uEmbedUrl(params, media) {
+  const id = params.id;
+  if (!id) return '';
+  // fastvip.space/e/<code> — code is title-specific; until a resolver exists we
+  // fall back to the demo code so the pipeline is exercisable end to end.
+  return `https://fastvip.space/e/${encodeURIComponent(params.shahidCode || 'uw2xnhcfket2')}`;
 }
 
 function renderServerBar(list, servers, selectedKey) {
@@ -200,19 +275,14 @@ async function refreshServerBar(root, params, media) {
   const seenKeys = new Map();
   const servers = [
     PRIMARY,
+    SHAHID4U,
     ...alternates.map((s) => {
       const n = (seenKeys.get(s.key) || 0) + 1;
       seenKeys.set(s.key, n);
       return n === 1 ? s : { ...s, key: `${s.key}#${n}` };
     })
   ];
-  // No alternates at all: the bar is pointless, VidCore alone keeps working.
-  if (!alternates.length) {
-    bar.hidden = true;
-    list.innerHTML = '';
-    if (ctx) ctx.servers = null;
-    return;
-  }
+  // Alternates are optional, but VidCore + Shahid4u always show.
   if (ctx) ctx.servers = servers;
   renderServerBar(list, servers, (ctx && ctx.selectedServerKey) || 'vidcore');
 }
@@ -220,15 +290,7 @@ async function refreshServerBar(root, params, media) {
 function pickServer(root, params, media, key) {
   const servers = (ctx && ctx.servers) || [];
   const entry = servers.find((s) => s.key === key) || servers[0] || PRIMARY;
-  const url = serverUrl(entry, params, media);
-  if (!url) return;
   if (ctx) ctx.selectedServerKey = entry.key;
-
-  const iframe = root.querySelector('.watch-frame iframe');
-  if (iframe) iframe.src = url;
-
-  const streamInput = root.querySelector('#stream-url-input');
-  if (streamInput) streamInput.value = url;
 
   const list = root.querySelector('#server-bar-list');
   if (list) {
@@ -239,6 +301,27 @@ function pickServer(root, params, media, key) {
       else btn.removeAttribute('aria-current');
     });
   }
+
+  if (entry.source === 'shahid4u') {
+    const embed = shahid4uEmbedUrl(params, media);
+    playViaShahid4u(root, embed, { signal: ctx && ctx.signal });
+    return;
+  }
+
+  const url = serverUrl(entry, params, media);
+  if (!url) return;
+
+  destroyNativePlayer();
+  const video = root.querySelector('.watch-frame video');
+  if (video) video.hidden = true;
+  const iframe = root.querySelector('.watch-frame iframe');
+  if (iframe) {
+    iframe.hidden = false;
+    iframe.src = url;
+  }
+
+  const streamInput = root.querySelector('#stream-url-input');
+  if (streamInput) streamInput.value = url;
 }
 
 function wireServerBar(root, params, media) {

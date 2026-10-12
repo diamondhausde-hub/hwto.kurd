@@ -859,6 +859,16 @@
   display: block;
 }
 
+.watch-frame video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  display: block;
+  object-fit: contain;
+}
+
 /* Local subtitle overlay — drawn above the cross-origin frame (the frame
    keeps all pointer events, so playback controls stay usable). */
 .subtitle-overlay {
