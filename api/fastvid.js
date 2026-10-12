@@ -76,8 +76,9 @@ export default async function handler(req, res) {
   }
 
   const from = isSafeHttpUrl(rawFrom);
-  const referer = from ? from.origin + '/' : process.env.FASTVID_REFERER || DEFAULT_REFERER;
-  const fromHost = from ? from.host : (new URL(referer).host);
+  // إرسال الرابط الكامل كما هو بدلاً من اقتطاع النطاق فقط
+  const referer = from ? from.href : process.env.FASTVID_REFERER || DEFAULT_REFERER;
+  const fromParam = from ? from.href : referer;
 
   try {
     const response = await fetch(target.href, {
@@ -112,8 +113,8 @@ export default async function handler(req, res) {
     }
 
     const m3u8Content = await response.text();
-    // تمرير الروابط لدالة التغليف لتخطي حماية CORS
-    const modifiedContent = proxifyPlaylist(m3u8Content, target.href, fromHost);
+    // تمرير الرابط الكامل لقطع الفيديو لتخطي حظر الـ Referer
+    const modifiedContent = proxifyPlaylist(m3u8Content, target.href, fromParam);
 
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Access-Control-Allow-Origin', '*');
