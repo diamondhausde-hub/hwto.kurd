@@ -32,15 +32,17 @@
     const playBtn = document.getElementById('play');
     let hls = null;
 
-    const proxy = (url) => {
-      const fromHost = new URL(url).origin;
-      return '/api/fastvid?url=' + encodeURIComponent(url) + '&from=' + encodeURIComponent(fromHost);
+    // تمرير رابط الصفحة الكامل كـ Referer بدلاً من النطاق فقط
+    const proxy = (streamUrl, refererUrl) => {
+      const ref = refererUrl || streamUrl;
+      return '/api/fastvid?url=' + encodeURIComponent(streamUrl) + '&from=' + encodeURIComponent(ref);
     };
 
-    function playStream(m3u8Url) {
+    function playStream(m3u8Url, embedPageUrl) {
       if (hls) { hls.destroy(); hls = null; }
       statusEl.textContent = 'جارٍ تحميل الفيديو عبر البروكسي…';
-      const proxied = proxy(m3u8Url);
+
+      const proxied = proxy(m3u8Url, embedPageUrl);
 
       if (window.Hls && Hls.isSupported()) {
         hls = new Hls();
@@ -48,7 +50,7 @@
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          statusEl.textContent = 'تم تحميل البث بنجاح — الفيديو جاهز للتشغيل!';
+          statusEl.textContent = 'تم تحميل البث بنجاح — الفيديو يعمل الآن!';
           video.play().catch(() => {});
         });
 
@@ -72,14 +74,12 @@
       const rawUrl = srcInput.value.trim();
       if (!rawUrl) return;
 
-      // إذا كان الرابط m3u8 نرسله مباشرة
       if (rawUrl.includes('.m3u8')) {
-        playStream(rawUrl);
+        playStream(rawUrl, rawUrl);
         return;
       }
 
-      // إذا كان رابط صفحة تضمين (embed)، نستخرج رابط m3u8 حي أولاً
-      statusEl.textContent = 'جارٍ استخراج رابط البث المباشر من السيرفر…';
+      statusEl.textContent = 'جارٍ استخراج رابط البث المباشر…';
       playBtn.disabled = true;
 
       try {
@@ -87,8 +87,9 @@
         const data = await res.json();
 
         if (data.success && data.stream_url) {
-          statusEl.textContent = 'تم الاستخراج بنجاح، جاري بدء البث…';
-          playStream(data.stream_url);
+          statusEl.textContent = 'تم الاستخراج، جاري بدء التشغيل…';
+          // نمرر رابط البث مع رابط صفحة المشغل الأصلية كـ Referer
+          playStream(data.stream_url, rawUrl);
         } else {
           statusEl.textContent = 'فشل الاستخراج: ' + (data.error || 'خطأ غير معروف');
         }
